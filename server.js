@@ -53,6 +53,75 @@ function setCurrentEndpoint(url, isTemporary = false) {
     broadcast({ type: 'ENDPOINT_UPDATE', url: currentEndpoint });
 }
 
+function getEndpointsForFrontend() {
+    const endpoints = [];
+
+    // Add the default endpoint first
+    if (defaultEndpoint) {
+        endpoints.push({ name: 'Default', url: defaultEndpoint });
+    }
+
+    // Add scheduled endpoints, ensuring uniqueness by URL
+    const uniqueUrls = new Set(endpoints.map(ep => ep.url));
+    const envKeys = Object.keys(process.env);
+    const endpointUrlKeys = envKeys.filter(key => /^ENDPOINT_\d+_URL$/.test(key));
+
+    endpointUrlKeys.forEach(urlKey => {
+        const url = process.env[urlKey];
+        if (url && !uniqueUrls.has(url)) {
+            const match = urlKey.match(/^ENDPOINT_(\d+)_URL$/);
+            const id = match ? match[1] : 'Unknown';
+            // You could enhance this by adding an optional ENDPOINT_{N}_NAME in .env
+            endpoints.push({ name: `Endpoint ${id}`, url: url });
+            uniqueUrls.add(url);
+        }
+    });
+
+    console.log("Endpoints prepared for frontend:", endpoints);
+    return endpoints;
+}
+
+// --- WebSocket Connection Handling ---
+wss.on('connection', (ws) => {
+    console.log('Client connected');
+
+    // Send the current endpoint immediately upon connection
+    ws.send(JSON.stringify({ type: 'ENDPOINT_UPDATE', url: currentEndpoint }));
+
+    // *** NEW: Send the list of available endpoints ***
+    const endpointList = getEndpointsForFrontend();
+    ws.send(JSON.stringify({ type: 'ENDPOINT_LIST', payload: endpointList }));
+    // *** END NEW ***
+
+    ws.on('message', (message) => {
+        // ... (keep existing message handling logic) ... //
+         try {
+            const data = JSON.parse(message);
+            console.log('Received message:', data);
+
+            if (data.type === 'MANUAL_SWITCH' && data.url) {
+                console.log(`Manual switch requested to: ${data.url}`);
+                setCurrentEndpoint(data.url);
+            } else if (data.type === 'GET_CURRENT_ENDPOINT') {
+                 // Send back the current endpoint to the requesting client
+                 ws.send(JSON.stringify({ type: 'ENDPOINT_UPDATE', url: currentEndpoint }));
+            }
+            // Add other message types if needed
+
+        } catch (error) {
+            console.error('Failed to parse message or invalid message format:', message, error);
+        }
+    });
+
+    ws.on('close', () => {
+        console.log('Client disconnected');
+    });
+
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+    });
+});
+
 function scheduleRevertToDefault(delayMinutes) {
     const revertTime = moment().tz(TIMEZONE).add(delayMinutes, 'minutes').toDate();
     console.log(`Scheduling revert to default endpoint (${defaultEndpoint}) at ${revertTime} (${delayMinutes} minutes from now)`);

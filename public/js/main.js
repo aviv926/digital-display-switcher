@@ -6,26 +6,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let ws;
     let connectInterval;
+    let currentUrlFromServer = null; // Keep track of the latest URL from server
 
-    // --- Populate Endpoints ---
-    // These endpoints are just for the manual switch dropdown.
-    // Add more options here if you want them manually selectable,
-    // or fetch them from the server if needed (more complex).
-    // We get the INITIAL endpoint via WebSocket.
-    const manualEndpointOptions = [
-        { name: "Default (Display 1)", url: "http://192.168.1.230:3007/main" },
-        { name: "News (Display 2)", url: "http://192.168.1.153:8007" },
-        { name: "Weather (Display 3)", url: "http://192.168.1.153:8007" }
-        // Add more entries here mirroring your .env if you want them selectable
-        // { name: "Custom Endpoint X", url: "http://your.other.endpoint" }
-    ];
-
-    manualEndpointOptions.forEach(ep => {
-        const option = document.createElement('option');
-        option.value = ep.url;
-        option.textContent = ep.name;
-        endpointSelect.appendChild(option);
-    });
+    // --- Remove the hardcoded array ---
+    // const manualEndpointOptions = [ ... ]; // DELETE THIS ARRAY
 
     function updateStatus(message, isError = false) {
         console.log(`Status: ${message}`);
@@ -33,19 +17,63 @@ document.addEventListener('DOMContentLoaded', () => {
         statusElement.style.color = isError ? '#ff6b6b' : '#aaa';
     }
 
+     // --- NEW: Function to populate dropdown ---
+    function populateEndpointDropdown(endpoints) {
+        endpointSelect.innerHTML = ''; // Clear existing options
+
+        if (!endpoints || endpoints.length === 0) {
+             const option = document.createElement('option');
+             option.textContent = "No endpoints configured";
+             option.disabled = true;
+             endpointSelect.appendChild(option);
+             switchButton.disabled = true; // Disable button if no options
+             return;
+        }
+
+        endpoints.forEach(ep => {
+            const option = document.createElement('option');
+            option.value = ep.url;
+            option.textContent = ep.name; // Use the name from the server
+            endpointSelect.appendChild(option);
+        });
+
+         switchButton.disabled = false; // Enable button
+        // After populating, try to select the current endpoint
+        updateDropdownSelection(currentUrlFromServer);
+    }
+
+    // --- NEW: Function to update dropdown selection ---
+    function updateDropdownSelection(url) {
+        if (!url) return; // Don't try to select if url is null/empty
+        currentUrlFromServer = url; // Store the latest known URL
+        for (let i = 0; i < endpointSelect.options.length; i++) {
+            if (endpointSelect.options[i].value === url) {
+                endpointSelect.selectedIndex = i;
+                break;
+            }
+        }
+    }
+
+
     function connectWebSocket() {
-        // Use window.location.host to connect to the same host serving the page
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${wsProtocol}//${window.location.host}`;
         ws = new WebSocket(wsUrl);
         updateStatus('Connecting...');
+        // Disable controls initially
+        endpointSelect.disabled = true;
+        switchButton.disabled = true;
+
 
         ws.onopen = () => {
             updateStatus('Connected');
             console.log('WebSocket connection established');
-            clearInterval(connectInterval); // Stop trying to reconnect
-            // Request the current endpoint state upon connection
-            ws.send(JSON.stringify({ type: 'GET_CURRENT_ENDPOINT' }));
+            clearInterval(connectInterval);
+             // Request the current endpoint state upon connection (server sends list automatically now)
+            // ws.send(JSON.stringify({ type: 'GET_CURRENT_ENDPOINT' })); // No longer strictly needed here
+             // Re-enable controls on connect
+            endpointSelect.disabled = false;
+            // switchButton remains disabled until list is populated
         };
 
         ws.onmessage = (event) => {
@@ -53,25 +81,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 const message = JSON.parse(event.data);
                 console.log('Message from server:', message);
 
-                if (message.type === 'ENDPOINT_UPDATE' && message.url) {
+                // *** HANDLE ENDPOINT_LIST ***
+                if (message.type === 'ENDPOINT_LIST' && message.payload) {
+                    console.log('Received endpoint list:', message.payload);
+                    populateEndpointDropdown(message.payload);
+                }
+                // *** END HANDLE ENDPOINT_LIST ***
+
+                else if (message.type === 'ENDPOINT_UPDATE' && message.url) {
                     updateStatus(`Switching to: ${message.url}`);
                     console.log(`Updating iframe src to: ${message.url}`);
+
                     if (displayFrame.src !== message.url) {
-                        displayFrame.src = message.url; // Update iframe source
-                        // Optionally add a slight delay before clearing status
+                        displayFrame.src = message.url;
                         setTimeout(() => updateStatus('Connected'), 1500);
                     } else {
                          console.log(`Iframe already at: ${message.url}`);
                          updateStatus('Connected');
                     }
-
-                    // Update the dropdown selection if the URL matches an option
-                    for (let i = 0; i < endpointSelect.options.length; i++) {
-                        if (endpointSelect.options[i].value === message.url) {
-                            endpointSelect.selectedIndex = i;
-                            break;
-                        }
-                    }
+                     // Update the dropdown selection based on the current URL
+                    updateDropdownSelection(message.url); // *** Use the new function ***
                 }
             } catch (error) {
                 console.error('Failed to parse message or invalid message format:', event.data, error);
@@ -80,7 +109,9 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         ws.onclose = (event) => {
-            let reason = '';
+             // ... (keep existing onclose logic) ... //
+             let reason = '';
+             // (keep reason mapping logic)
              if (event.code === 1000) reason = "Normal closure";
              else if (event.code === 1001) reason = "Going away";
              else if (event.code === 1002) reason = "Protocol error";
@@ -100,24 +131,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
             console.log(`WebSocket closed: ${reason} (Code: ${event.code}). Clean close: ${event.wasClean}`);
             updateStatus(`Disconnected: ${reason}. Retrying...`, true);
-            ws = null; // Ensure ws is null so retry logic works
-            // Attempt to reconnect after a delay
+            ws = null;
+            // Disable controls on disconnect
+             endpointSelect.disabled = true;
+             switchButton.disabled = true;
+             endpointSelect.innerHTML = '<option>Disconnected</option>'; // Clear dropdown
+
             if (!connectInterval) {
                 connectInterval = setInterval(() => {
                     if (!ws || ws.readyState === WebSocket.CLOSED) {
                          console.log('Attempting to reconnect WebSocket...');
                         connectWebSocket();
                     }
-                }, 5000); // Retry every 5 seconds
+                }, 5000);
             }
         };
 
         ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-            updateStatus('WebSocket connection error', true);
-            // The onclose event will likely follow, triggering the reconnect logic
+            // ... (keep existing onerror logic) ... //
+             console.error('WebSocket error:', error);
+             updateStatus('WebSocket connection error', true);
              if (ws) {
-                ws.close(); // Ensure closure if error occurs before open
+                ws.close();
             }
         };
     }
@@ -125,7 +160,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Event Listeners ---
     switchButton.addEventListener('click', () => {
         const selectedUrl = endpointSelect.value;
-        if (selectedUrl && ws && ws.readyState === WebSocket.OPEN) {
+         // Check if button is enabled and selection is valid
+        if (!switchButton.disabled && selectedUrl && ws && ws.readyState === WebSocket.OPEN) {
             updateStatus(`Manual switch to: ${selectedUrl}`);
             console.log(`Sending manual switch request for: ${selectedUrl}`);
             ws.send(JSON.stringify({ type: 'MANUAL_SWITCH', url: selectedUrl }));
@@ -133,7 +169,8 @@ document.addEventListener('DOMContentLoaded', () => {
              updateStatus('Cannot switch: Not connected', true);
             console.warn('Attempted manual switch while WebSocket is not open.');
         } else {
-            console.warn('No endpoint selected for manual switch.');
+             updateStatus('Cannot switch: No valid endpoint', true);
+            console.warn('Manual switch attempt without valid selection or connection.');
         }
     });
 
