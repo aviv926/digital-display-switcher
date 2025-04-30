@@ -1,0 +1,21 @@
+
+services:
+  digital-display-switcher:
+    build: .          # Build the image from the Dockerfile in the current directory
+    container_name: digital-display-switcher-app
+    restart: unless-stopped # Restart policy
+    env_file:
+      - .env          # Load environment variables from the .env file
+    ports:
+      # Map the host port (first value) to the container port (second value)
+      # Use the SERVER_PORT from .env for the container port if possible,
+      # but we need a fixed host port here or let Docker choose one.
+      # Let's map host 3000 to the container's SERVER_PORT (which defaults to 3000 if not set in .env)
+      # Format: "HOST_PORT:CONTAINER_PORT"
+      - "3000:${SERVER_PORT:-3000}" # Maps host port 3000 to container port defined by SERVER_PORT (or 3000 if unset)
+    environment:
+      # Ensure TZ is explicitly passed, although env_file should handle it
+      - TZ=${TZ}
+    # If you needed persistent storage (e.g., for logs), you'd add volumes here:
+    # volumes:
+    #   - ./logs:/usr/src/app/logs

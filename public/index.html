@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Display</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <iframe id="displayFrame" src="" frameborder="0"></iframe>
+
+    <div id="controls">
+        <div id="control-panel">
+            <label for="endpoint-select">Switch Endpoint:</label>
+            <select id="endpoint-select">
+                <!-- Options will be populated by JS -->
+            </select>
+            <button id="switch-button">Switch Now</button>
+             <p id="status">Connecting...</p>
+        </div>
+    </div>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
