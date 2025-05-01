@@ -63,6 +63,21 @@ ENDPOINT_3_NAME=Special Event Display
 ```
 
 ## Setup & Running
+### Use docker image
+
+1.  **Pull the Latest Image (Recommended):**
+    The Docker image is automatically built and published to GitHub Packages. Pull the latest version:
+    ```bash
+    docker compose pull
+    ```
+
+2.  **Start the Service:**
+    This command starts the container in the background (`-d`). It will use the pulled image and read your configuration from the `.env` file.
+    ```bash
+    docker compose up -d
+    ```
+
+### (Alternative) Build Locally:
 
 1.  **Clone the repository:**
     ```bash
