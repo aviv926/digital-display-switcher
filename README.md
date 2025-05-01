@@ -23,7 +23,7 @@ Configuration is managed through a `.env` file in the root directory. Create thi
 **Key Configuration Variables:**
 
 *   `SERVER_PORT`: The port number the application server will listen on *inside* the container (e.g., `8009`). The `docker-compose.yml` file maps a host port (e.g., 3000) to this container port.
-*   `TZ`: The timezone for scheduling (e.g., `Asia/Jerusalem`, `America/New_York`, `UTC`). Use a valid TZ database name.
+*   `TZ`: The timezone for scheduling (e.g., `America/New_York`, `UTC`). Use a valid TZ database name.
 *   `DEFAULT_ENDPOINT_URL`: The URL to display when no schedule is active or after a temporary schedule expires.
 *   `ENDPOINT_{N}_URL`: The URL for a specific endpoint, where `{N}` is a number (e.g., `ENDPOINT_1_URL`, `ENDPOINT_2_URL`).
 *   `ENDPOINT_{N}_NAME` (Optional): A friendly name for the endpoint `{N}` to be displayed in the control panel (e.g., `ENDPOINT_1_NAME=Main Dashboard`). Defaults to `Endpoint {N}` if not set.
