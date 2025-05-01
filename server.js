@@ -1,4 +1,3 @@
- 
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -43,7 +42,7 @@ function setCurrentEndpoint(url, isTemporary = false) {
     console.log(`Setting current endpoint to: ${url}`);
     currentEndpoint = url;
 
-    // Cancel any existing revert job if we are setting a new endpoint
+    // Cancel any existing revert job if we are setting a new endpoint (manual or scheduled)
     if (revertJob) {
         console.log("Cancelling previous revert job.");
         revertJob.cancel();
@@ -56,12 +55,12 @@ function setCurrentEndpoint(url, isTemporary = false) {
 function getEndpointsForFrontend() {
     const endpoints = [];
 
-    // Add the default endpoint first
+    // Add the default endpoint first if it exists
     if (defaultEndpoint) {
         endpoints.push({ name: 'Default', url: defaultEndpoint });
     }
 
-    // Add scheduled endpoints, ensuring uniqueness by URL
+    // Add scheduled/configured endpoints, ensuring uniqueness by URL
     const uniqueUrls = new Set(endpoints.map(ep => ep.url));
     const envKeys = Object.keys(process.env);
     const endpointUrlKeys = envKeys.filter(key => /^ENDPOINT_\d+_URL$/.test(key));
@@ -71,8 +70,10 @@ function getEndpointsForFrontend() {
         if (url && !uniqueUrls.has(url)) {
             const match = urlKey.match(/^ENDPOINT_(\d+)_URL$/);
             const id = match ? match[1] : 'Unknown';
-            // You could enhance this by adding an optional ENDPOINT_{N}_NAME in .env
-            endpoints.push({ name: `Endpoint ${id}`, url: url });
+            // Allow defining a name via ENDPOINT_{N}_NAME, otherwise use a default name
+            const nameKey = `ENDPOINT_${id}_NAME`;
+            const name = process.env[nameKey] || `Endpoint ${id}`;
+            endpoints.push({ name: name, url: url });
             uniqueUrls.add(url);
         }
     });
@@ -81,46 +82,6 @@ function getEndpointsForFrontend() {
     return endpoints;
 }
 
-// --- WebSocket Connection Handling ---
-wss.on('connection', (ws) => {
-    console.log('Client connected');
-
-    // Send the current endpoint immediately upon connection
-    ws.send(JSON.stringify({ type: 'ENDPOINT_UPDATE', url: currentEndpoint }));
-
-    // *** NEW: Send the list of available endpoints ***
-    const endpointList = getEndpointsForFrontend();
-    ws.send(JSON.stringify({ type: 'ENDPOINT_LIST', payload: endpointList }));
-    // *** END NEW ***
-
-    ws.on('message', (message) => {
-        // ... (keep existing message handling logic) ... //
-         try {
-            const data = JSON.parse(message);
-            console.log('Received message:', data);
-
-            if (data.type === 'MANUAL_SWITCH' && data.url) {
-                console.log(`Manual switch requested to: ${data.url}`);
-                setCurrentEndpoint(data.url);
-            } else if (data.type === 'GET_CURRENT_ENDPOINT') {
-                 // Send back the current endpoint to the requesting client
-                 ws.send(JSON.stringify({ type: 'ENDPOINT_UPDATE', url: currentEndpoint }));
-            }
-            // Add other message types if needed
-
-        } catch (error) {
-            console.error('Failed to parse message or invalid message format:', message, error);
-        }
-    });
-
-    ws.on('close', () => {
-        console.log('Client disconnected');
-    });
-
-    ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
-    });
-});
 
 function scheduleRevertToDefault(delayMinutes) {
     const revertTime = moment().tz(TIMEZONE).add(delayMinutes, 'minutes').toDate();
@@ -128,6 +89,7 @@ function scheduleRevertToDefault(delayMinutes) {
 
     // Cancel previous revert job if one exists (e.g., manual override during scheduled slot)
      if (revertJob) {
+        console.log("Cancelling existing revert job before scheduling new one.");
         revertJob.cancel();
     }
 
@@ -176,8 +138,11 @@ function parseScheduledEndpoints() {
                         console.warn(`Invalid schedule format for endpoint ${id}: ${entry}`);
                     }
                 });
+            } else if (url && !scheduleString) {
+                 // Endpoint URL defined but no schedule - useful for manual switching list
+                 console.log(`Found Endpoint ${id}: URL=${url} (no schedule, available for manual switch)`);
             } else {
-                 console.warn(`Missing URL or SCHEDULE for endpoint ID ${id}`);
+                 console.warn(`Missing URL for endpoint ID ${id} defined by key ${urlKey}`);
             }
         }
     });
@@ -189,22 +154,21 @@ function setupSchedules() {
     console.log(`Setting up schedules in timezone: ${TIMEZONE}`);
     // Cancel all existing jobs before setting up new ones (e.g., on restart)
     schedule.gracefulShutdown().then(() => {
-        console.log("Cancelled existing scheduled jobs.");
+        console.log("Cancelled existing scheduled jobs (if any).");
 
         scheduledEndpoints.forEach(endpoint => {
-            const { url, rule, durationMinutes } = endpoint;
+            const { url, rule, durationMinutes, id } = endpoint;
+            // Skip if rule is missing (can happen if only URL/Name are defined for manual list)
+            if (!rule) return;
+
             const { dayOrWildcard, timeOrHourly } = rule;
 
             try {
+                let cronRule;
                 if (timeOrHourly.toLowerCase() === 'hourly') {
                     // Schedule for every hour, slightly offset to avoid conflicts at :00
-                    const cronRule = `1 * * * ${dayOrWildcard}`; // 1 minute past every hour
-                     console.log(`Scheduling hourly job for ${url} with rule "${cronRule}"`);
-                    schedule.scheduleJob({ rule: cronRule, tz: TIMEZONE }, () => {
-                         console.log(`Hourly trigger for ${url}`);
-                        setCurrentEndpoint(url, true);
-                        scheduleRevertToDefault(durationMinutes);
-                    });
+                    cronRule = `1 * * * ${dayOrWildcard}`; // 1 minute past every hour
+                     console.log(`Scheduling hourly job for Endpoint ${id} (${url}) with rule "${cronRule}"`);
                 } else {
                     const timeParts = timeOrHourly.split(':');
                     if (timeParts.length === 2) {
@@ -213,22 +177,27 @@ function setupSchedules() {
 
                         if (!isNaN(hour) && !isNaN(minute)) {
                             // Specific time schedule
-                            const cronRule = `${minute} ${hour} * * ${dayOrWildcard}`;
-                            console.log(`Scheduling timed job for ${url} with rule "${cronRule}"`);
-                            schedule.scheduleJob({ rule: cronRule, tz: TIMEZONE }, () => {
-                                console.log(`Timed trigger for ${url}`);
-                                setCurrentEndpoint(url, true);
-                                scheduleRevertToDefault(durationMinutes);
-                            });
+                            cronRule = `${minute} ${hour} * * ${dayOrWildcard}`;
+                            console.log(`Scheduling timed job for Endpoint ${id} (${url}) with rule "${cronRule}"`);
                         } else {
                             console.warn(`Invalid time format in rule for ${url}: ${timeOrHourly}`);
+                            return; // Skip scheduling this rule
                         }
                     } else {
                         console.warn(`Invalid time format in rule for ${url}: ${timeOrHourly}`);
+                        return; // Skip scheduling this rule
                     }
                 }
+
+                // Schedule the actual job
+                schedule.scheduleJob({ rule: cronRule, tz: TIMEZONE }, () => {
+                     console.log(`Triggered schedule for Endpoint ${id} (${url})`);
+                    setCurrentEndpoint(url, true); // Mark as temporary for potential revert
+                    scheduleRevertToDefault(durationMinutes);
+                });
+
             } catch (error) {
-                console.error(`Error scheduling job for ${url} with rule ${JSON.stringify(rule)}:`, error);
+                console.error(`Error scheduling job for Endpoint ${id} (${url}) with rule ${JSON.stringify(rule)}:`, error);
             }
         });
          console.log("Schedules setup complete.");
@@ -243,24 +212,30 @@ wss.on('connection', (ws) => {
     // Send the current endpoint immediately upon connection
     ws.send(JSON.stringify({ type: 'ENDPOINT_UPDATE', url: currentEndpoint }));
 
+    // Send the list of available endpoints for the dropdown
+    const endpointList = getEndpointsForFrontend();
+    ws.send(JSON.stringify({ type: 'ENDPOINT_LIST', payload: endpointList }));
+
     ws.on('message', (message) => {
-        try {
+         try {
             const data = JSON.parse(message);
             console.log('Received message:', data);
 
             if (data.type === 'MANUAL_SWITCH' && data.url) {
-                console.log(`Manual switch requested to: ${data.url}`);
-                setCurrentEndpoint(data.url); // isTemporary = false, manual overrides don't auto-revert
+                // This handles the "Apply to all devices" case from the client
+                console.log(`Manual switch requested (broadcast) to: ${data.url}`);
+                setCurrentEndpoint(data.url); // isTemporary = false, manual overrides don't auto-revert by default
                 // Note: setCurrentEndpoint already cancels any active revertJob
             }
-             else if (data.type === 'GET_CURRENT_ENDPOINT') {
+             else if (data.type === 'GET_CURRENT_ENDPOINT') { // Still useful if client needs to re-sync
                  // Send back the current endpoint to the requesting client
+                 console.log(`Client requested current endpoint. Sending: ${currentEndpoint}`);
                  ws.send(JSON.stringify({ type: 'ENDPOINT_UPDATE', url: currentEndpoint }));
             }
             // Add other message types if needed
 
         } catch (error) {
-            console.error('Failed to parse message or invalid message format:', message, error);
+            console.error('Failed to parse message or invalid message format:', message.toString(), error); // Log raw message
         }
     });
 
@@ -274,20 +249,21 @@ wss.on('connection', (ws) => {
 });
 
 // --- Initial Setup and Start Server ---
-parseScheduledEndpoints();
-setupSchedules();
+parseScheduledEndpoints(); // Parse .env variables
+setupSchedules();         // Set up node-schedule jobs
 
 server.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
-    console.log(`Default endpoint: ${defaultEndpoint}`);
+    console.log(`Default endpoint: ${defaultEndpoint || 'Not set'}`);
     console.log(`Timezone: ${TIMEZONE}`);
-    console.log("Scheduled Endpoints Rules:", scheduledEndpoints);
+    // Log the rules that were successfully parsed and scheduled
+    console.log("Active Scheduled Endpoints Rules:", scheduledEndpoints.filter(ep => ep.rule));
     console.log(`Current endpoint on startup: ${currentEndpoint}`);
 });
 
 // --- Graceful Shutdown ---
-process.on('SIGTERM', () => {
-    console.log('SIGTERM signal received: closing HTTP server');
+function gracefulShutdown(signal) {
+    console.log(`${signal} signal received: closing HTTP server`);
     server.close(() => {
         console.log('HTTP server closed');
         schedule.gracefulShutdown()
@@ -295,15 +271,7 @@ process.on('SIGTERM', () => {
             .catch(err => console.error('Error stopping scheduled jobs:', err))
             .finally(() => process.exit(0));
     });
-});
+}
 
-process.on('SIGINT', () => {
-     console.log('SIGINT signal received: closing HTTP server');
-    server.close(() => {
-        console.log('HTTP server closed');
-         schedule.gracefulShutdown()
-            .then(() => console.log('Scheduled jobs stopped.'))
-            .catch(err => console.error('Error stopping scheduled jobs:', err))
-            .finally(() => process.exit(0));
-    });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT')); // Handle Ctrl+C
