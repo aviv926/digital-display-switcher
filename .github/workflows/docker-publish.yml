@@ -1,51 +1,30 @@
-name: Build and Push Docker Image
+name: Build and Publish Docker Image
 
 on:
-  push:
-    branches: [ main ] # Trigger on push to the main branch
   pull_request:
-    branches: [ main ] # Trigger on pull requests targeting the main branch
-  workflow_dispatch: # Allow manual triggering
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-  build-and-push:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read # Needed to checkout the repository
-      packages: write # Needed to push Docker image to GitHub Packages (ghcr.io)
-
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Log in to the GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }} # Use the built-in GITHUB_TOKEN
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }} # Image name format: ghcr.io/owner/repo
-          tags: |
-            # Sha tag for all events except pull requests
-            type=sha,enable=true,priority=100,prefix=,suffix=,format=short
-            # Git branch tag for pushes to branches
-            type=ref,event=branch
-            # Git tag tag for pushes to tags
-            type=ref,event=tag
-            # Pull request number tag for pull requests
-            type=ref,event=pr
-            # Latest tag for push to main branch
-            type=raw,value=latest,enable={{is_default_branch}}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v4
         with:
-          context: . # Build context is the repository root
-          push: ${{ github.event_name != 'pull_request' }} # Only push on main branch pushes or manual triggers, not PRs
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}:latest
